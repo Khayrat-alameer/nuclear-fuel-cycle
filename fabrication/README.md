@@ -5,7 +5,7 @@
 ### Run the Web Demo
 
 ```bash
-cd "C:\Users\khayrat\Desktop\Nuclear Engineering\nuclear-fuel-cycle"
+cd "nuclear-fuel-cycle"
 pip install streamlit numpy scipy pandas
 streamlit run fabrication/web_app.py
 ```
