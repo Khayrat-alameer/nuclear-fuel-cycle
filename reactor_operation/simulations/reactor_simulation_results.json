@@ -1,0 +1,34 @@
+{
+  "simulation_type": "reactor_operation",
+  "simulation_date": "2025-04-20",
+  "reactor": {
+    "name": "\u5178\u578bPWR",
+    "power_mwe": 1000,
+    "power_mwt": 3030.3,
+    "thermal_efficiency": 0.33,
+    "capacity_factor": 0.9,
+    "cycle_days": 18,
+    "refuel_days": 30
+  },
+  "core": {
+    "assemblies": 193,
+    "assembly_mass_kg": 200,
+    "core_heavy_metal_t": 38.6,
+    "active_fuel_length_m": 3.6,
+    "rods_per_assembly": 264
+  },
+  "fuel_cycle": {
+    "batch_reload_kg": 293520.83,
+    "cycles_per_year": 7.6,
+    "annual_heavy_metal_t": 0.16,
+    "burnup_gwd_t": 50,
+    "initial_enrichment_pct": 4.5,
+    "discharge_enrichment_pct": 3.825
+  },
+  "performance": {
+    "annual_electricity_gwh": 7884.0,
+    "capacity_factor": 90.0,
+    "peak_linear_power_w_cm": 180,
+    "avg_linear_power_w_cm": 120
+  }
+}

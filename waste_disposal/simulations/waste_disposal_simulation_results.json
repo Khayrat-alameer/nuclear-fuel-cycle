@@ -1,0 +1,34 @@
+{
+  "simulation_type": "waste_disposal",
+  "simulation_date": "2025-04-20",
+  "interim_storage": {
+    "capacity_tHM": 10000,
+    "initial_heat_W_kg": 2.0,
+    "decay_constant_yr": 0.035,
+    "cooling_time_to_0.5W_kg": 39.6,
+    "heat_by_age_years": {
+      "5": 1.6789,
+      "10": 1.4094,
+      "20": 0.9932,
+      "40": 0.4932,
+      "100": 0.0604
+    }
+  },
+  "disposal": {
+    "repository_capacity_tHM": 100000,
+    "repository_depth_m": 500,
+    "geologic_formation": "Clay",
+    "waste_packages": 3,
+    "construction_cost_M USD": 10000,
+    "operation_cost_M USD": 1.5,
+    "total_cost_M USD": 1.51,
+    "cost_per_kg": 51.45
+  },
+  "packages": {
+    "canister_material": "Carbon Steel",
+    "canister_thickness_mm": 100,
+    "buffer_material": "Bentonite",
+    "thermal_limit_W_kg": 0.5,
+    "glass_form": "Borosilicate"
+  }
+}

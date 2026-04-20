@@ -1,0 +1,24 @@
+{
+  "simulation_type": "fuel_fabrication",
+  "simulation_date": "2025-04-20",
+  "facility": {
+    "name": "Commercial Fuel Fabrication Plant",
+    "capacity_tU_yr": 1200,
+    "process_loss_pct": 2.0
+  },
+  "pellet_production": {
+    "uranium_input_kg": 31838,
+    "uo2_pellets_kg": 35395.62,
+    "conversion_cost_USD": 7959500,
+    "enrichment_cost_USD": 28439450,
+    "fabrication_cost_USD": 10618686.33,
+    "total_cost_USD": 47017636.33,
+    "cost_per_kg_UO2": 1328.35
+  },
+  "assembly_production": {
+    "assemblies": 172,
+    "rods_per_assembly": 264,
+    "pellet_cost": 15840000,
+    "labor_cost": 8600000
+  }
+}

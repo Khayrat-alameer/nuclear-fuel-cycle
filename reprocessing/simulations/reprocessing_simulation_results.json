@@ -1,0 +1,32 @@
+{
+  "simulation_type": "reprocessing",
+  "simulation_date": "2025-04-20",
+  "feed": {
+    "spent_fuel_kg": 29350,
+    "burnup_gwd_t": 50,
+    "cooling_years": 5
+  },
+  "products": {
+    "uranium_recovered_kg": 27743.09,
+    "plutonium_recovered_kg": 380.79,
+    "minor_actinides_kg": 79.25,
+    "fission_products_kg": 997.9
+  },
+  "recovery": {
+    "uranium_efficiency_pct": 99.5,
+    "plutonium_efficiency_pct": 99.8,
+    "actinide_efficiency_pct": 90.0
+  },
+  "economics": {
+    "capacity_tHM_yr": 800,
+    "capital_cost_M USD": 5000,
+    "annual_capital_M USD": 166.67,
+    "operating_cost_M USD": 0.04,
+    "cost_per_kg": 1.5
+  },
+  "waste": {
+    "hlw_kg": 587.0,
+    "ilw_kg": 880.5,
+    "llw_kg": 1467.5
+  }
+}
