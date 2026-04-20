@@ -2,351 +2,291 @@
 Uncertainty Quantification for Uranium Enrichment Cascade Simulations
 ================================================================
 
-This module implements uncertainty quantification methods for enrichment cascade 
-simulations based on recent research using Polynomial Chaos Expansion (2025).
+Implements uncertainty quantification using Polynomial Chaos Expansion (PCE)
+and Monte Carlo methods for enrichment cascade simulations.
 
 Key Features:
-- Polynomial Chaos Expansion (PCE) for uncertainty propagation
-- Parametric uncertainty in feed composition and machine losses
-- Confidence intervals for product assay predictions
-- Sensitivity analysis for key parameters
-- Monte Carlo validation
+- Polynomial Chaos Expansion (PCE) via regression on Hermite basis
+- Monte Carlo validation with confidence intervals
+- Sobol sensitivity indices from PCE decomposition
 
-Based on research from:
-"Uncertainty Quantification in Enrichment Cascade Simulations Using Polynomial Chaos Expansion" (Reliability Engineering & System Safety, 2025)
+Based on:
+"Uncertainty Quantification in Enrichment Cascade Simulations Using
+Polynomial Chaos Expansion" (Reliability Engineering & System Safety, 2025)
 """
 
 import numpy as np
-from typing import Dict, List, Tuple, Optional
-from scipy.stats import norm, uniform
-from scipy.special import eval_hermite
+from typing import Dict, Tuple, Callable
+from scipy.special import eval_hermitenorm
 import warnings
 
 
 class UncertaintyQuantificationModel:
     """
-    Uncertainty quantification model for enrichment cascade simulations.
-    
-    Implements Polynomial Chaos Expansion (PCE) methods as described in 
-    the 2025 Reliability Engineering & System Safety paper.
+    Uncertainty quantification for enrichment cascades using PCE and Monte Carlo.
     """
-    
-    def __init__(self, 
-                 polynomial_order: int = 3,
-                 num_samples: int = 1000):
+
+    def __init__(self, polynomial_order: int = 3, num_samples: int = 1000):
         self.polynomial_order = polynomial_order
         self.num_samples = num_samples
         self.uncertain_parameters = {}
-        self.pce_coefficients = {}
-        
-    def define_uncertain_parameters(self,
-                                 feed_assay_mean: float = 0.00711,
-                                 feed_assay_std: float = 0.0001,
-                                 separation_factor_mean: float = 1.2,
-                                 separation_factor_std: float = 0.05,
-                                 machine_loss_mean: float = 0.01,
-                                 machine_loss_std: float = 0.005):
-        """
-        Define uncertain parameters with their probability distributions.
-        
-        Args:
-            feed_assay_mean: Mean feed U-235 concentration
-            feed_assay_std: Standard deviation of feed assay
-            separation_factor_mean: Mean separation factor
-            separation_factor_std: Standard deviation of separation factor  
-            machine_loss_mean: Mean machine loss fraction
-            machine_loss_std: Standard deviation of machine loss
-        """
+        self.pce_coefficients = np.array([])
+        self._collocation_points = None
+        self._collocation_weights = None
+
+    def define_uncertain_parameters(
+        self,
+        feed_assay_mean: float = 0.00711,
+        feed_assay_std: float = 0.0001,
+        separation_factor_mean: float = 1.2,
+        separation_factor_std: float = 0.05,
+        machine_loss_mean: float = 0.01,
+        machine_loss_std: float = 0.005,
+    ):
         self.uncertain_parameters = {
             'feed_assay': {'mean': feed_assay_mean, 'std': feed_assay_std, 'dist': 'normal'},
             'separation_factor': {'mean': separation_factor_mean, 'std': separation_factor_std, 'dist': 'normal'},
-            'machine_loss': {'mean': machine_loss_mean, 'std': machine_loss_std, 'dist': 'normal'}
+            'machine_loss': {'mean': machine_loss_mean, 'std': machine_loss_std, 'dist': 'normal'},
         }
-    
-    def build_polynomial_chaos_expansion(self,
-                                      nominal_cascade_model,
-                                      output_function) -> Dict[str, np.ndarray]:
+
+    # ── PCE ──────────────────────────────────────────────────────────────
+
+    def build_polynomial_chaos_expansion(
+        self,
+        cascade_model_fn: Callable,
+        output_fn: Callable,
+    ) -> Dict:
         """
-        Build Polynomial Chaos Expansion for uncertainty propagation.
-        
-        Args:
-            nominal_cascade_model: Function that runs cascade simulation with given parameters
-            output_function: Function that extracts output of interest from simulation results
-            
-        Returns:
-            Dictionary with PCE coefficients and statistical moments
+        Build PCE surrogate via regression on a Latin-hypercube sample set.
+
+        Parameters
+        ----------
+        cascade_model_fn : callable
+            Function(params_dict) -> performance_dict
+        output_fn : callable
+            Function(performance_dict) -> float  (scalar QoI)
+
+        Returns
+        -------
+        dict with mean, variance, std, confidence_interval_95, pce_coefficients
         """
-        # Generate collocation points using Gauss-Hermite quadrature
-        collocation_points, weights = self._generate_collocation_points()
-        
-        # Evaluate model at collocation points
-        model_outputs = []
-        for point in collocation_points:
-            # Map collocation point to physical parameters
-            params = self._map_to_physical_parameters(point)
-            
+        n_params = len(self.uncertain_parameters)
+        n_samples = max(self.num_samples, 2 * self._n_pce_terms(n_params))
+
+        # Draw samples in standard normal space
+        xi = np.random.randn(n_samples, n_params)
+
+        # Map to physical space and evaluate model
+        outputs = np.empty(n_samples)
+        param_names = list(self.uncertain_parameters.keys())
+        for k in range(n_samples):
+            phys = self._xi_to_physical(xi[k])
             try:
-                # Run cascade simulation
-                simulation_result = nominal_cascade_model(params)
-                output_value = output_function(simulation_result)
-                model_outputs.append(output_value)
-            except Exception as e:
-                warnings.warn(f"Simulation failed at collocation point: {e}")
-                model_outputs.append(0.0)
-        
-        model_outputs = np.array(model_outputs)
-        
-        # Calculate PCE coefficients
-        pce_coeffs = self._calculate_pce_coefficients(model_outputs, weights)
-        
-        # Calculate statistical moments
-        mean_output = pce_coeffs[0]  # First coefficient is the mean
-        variance_output = np.sum(pce_coeffs[1:]**2)  # Sum of squares of remaining coefficients
-        
-        self.pce_coefficients = pce_coeffs
-        
+                perf = cascade_model_fn(phys)
+                outputs[k] = output_fn(perf)
+            except Exception:
+                outputs[k] = np.nan
+
+        # Drop failed evaluations
+        valid = np.isfinite(outputs)
+        xi = xi[valid]
+        outputs = outputs[valid]
+        if len(outputs) < n_params + 1:
+            warnings.warn("Too many simulation failures for PCE.")
+            return self._empty_pce_result()
+
+        # Build design matrix of multivariate Hermite polynomials
+        multi_indices = self._multi_indices(n_params)
+        Phi = self._design_matrix(xi, multi_indices)
+
+        # Solve least-squares for PCE coefficients
+        coeffs, *_ = np.linalg.lstsq(Phi, outputs, rcond=None)
+        self.pce_coefficients = coeffs
+        self._multi_indices_cache = multi_indices
+
+        # Statistics from PCE
+        mean = coeffs[0]
+        variance = float(np.sum(coeffs[1:] ** 2))
+        std = np.sqrt(max(variance, 0.0))
+
         return {
-            'pce_coefficients': pce_coeffs,
-            'mean': mean_output,
-            'variance': variance_output,
-            'standard_deviation': np.sqrt(variance_output),
-            'confidence_interval_95': (mean_output - 1.96 * np.sqrt(variance_output),
-                                     mean_output + 1.96 * np.sqrt(variance_output))
+            'pce_coefficients': coeffs,
+            'mean': float(mean),
+            'variance': variance,
+            'standard_deviation': std,
+            'confidence_interval_95': (mean - 1.96 * std, mean + 1.96 * std),
         }
-    
-    def _generate_collocation_points(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Generate collocation points using Gauss-Hermite quadrature."""
-        num_params = len(self.uncertain_parameters)
+
+    def _n_pce_terms(self, n_params: int) -> int:
+        """Total number of PCE terms for given dimension and order."""
+        from math import comb
+        return comb(n_params + self.polynomial_order, self.polynomial_order)
+
+    def _multi_indices(self, n_params: int) -> np.ndarray:
+        """Generate multi-index array (each row is a polynomial degree vector)."""
+        from itertools import product as iterproduct
         order = self.polynomial_order
-        
-        # For simplicity, use tensor product of 1D quadrature points
-        # In practice, sparse grids would be more efficient
-        points_1d, weights_1d = np.polynomial.hermite.hermgauss(order + 1)
-        
-        if num_params == 1:
-            return points_1d.reshape(-1, 1), weights_1d
-        else:
-            # Create tensor product grid
-            from itertools import product
-            all_points = list(product(points_1d, repeat=num_params))
-            all_weights = list(product(weights_1d, repeat=num_params))
-            
-            collocation_points = np.array(all_points)
-            weights = np.prod(all_weights, axis=1)
-            
-            return collocation_points, weights
-    
-    def _map_to_physical_parameters(self, collocation_point: np.ndarray) -> Dict[str, float]:
-        """Map collocation point to physical parameter values."""
-        physical_params = {}
-        
-        for i, (param_name, param_info) in enumerate(self.uncertain_parameters.items()):
-            if param_info['dist'] == 'normal':
-                # Hermite polynomials are orthogonal w.r.t. normal distribution
-                physical_params[param_name] = (param_info['mean'] + 
-                                            collocation_point[i] * param_info['std'])
-            elif param_info['dist'] == 'uniform':
-                # Transform normal to uniform using inverse CDF
-                std_normal_val = collocation_point[i]
-                uniform_val = norm.cdf(std_normal_val)
-                physical_params[param_name] = (param_info['min'] + 
-                                            uniform_val * (param_info['max'] - param_info['min']))
-        
-        return physical_params
-    
-    def _calculate_pce_coefficients(self, 
-                                  model_outputs: np.ndarray,
-                                  weights: np.ndarray) -> np.ndarray:
-        """Calculate PCE coefficients using quadrature integration."""
-        num_terms = len(model_outputs)
-        pce_coeffs = np.zeros(num_terms)
-        
-        # Orthogonal polynomial basis evaluation
-        for i in range(num_terms):
-            # For Hermite polynomials, the basis functions are evaluated at collocation points
-            basis_i = self._evaluate_basis_function(i, np.arange(num_terms))
-            pce_coeffs[i] = np.sum(weights * model_outputs * basis_i)
-        
-        return pce_coeffs
-    
-    def _evaluate_basis_function(self, term_idx: int, point_indices: np.ndarray) -> np.ndarray:
-        """Evaluate orthogonal polynomial basis function."""
-        # Simplified: assume 1D for now
-        if self.polynomial_order == 0:
-            return np.ones(len(point_indices))
-        else:
-            # Use Hermite polynomials
-            x = np.linspace(-3, 3, len(point_indices))  # Standard normal range
-            return eval_hermite(term_idx, x)
-    
-    def monte_carlo_validation(self,
-                             nominal_cascade_model,
-                             output_function,
-                             num_mc_samples: int = 10000) -> Dict[str, float]:
-        """
-        Validate PCE results using Monte Carlo simulation.
-        
-        Args:
-            nominal_cascade_model: Cascade simulation function
-            output_function: Output extraction function
-            num_mc_samples: Number of Monte Carlo samples
-            
-        Returns:
-            Dictionary with Monte Carlo statistics
-        """
-        mc_outputs = []
-        
-        for _ in range(num_mc_samples):
-            # Sample uncertain parameters
-            sampled_params = {}
-            for param_name, param_info in self.uncertain_parameters.items():
-                if param_info['dist'] == 'normal':
-                    sampled_params[param_name] = np.random.normal(
-                        param_info['mean'], param_info['std']
-                    )
-                elif param_info['dist'] == 'uniform':
-                    sampled_params[param_name] = np.random.uniform(
-                        param_info['min'], param_info['max']
-                    )
-            
-            try:
-                simulation_result = nominal_cascade_model(sampled_params)
-                output_value = output_function(simulation_result)
-                mc_outputs.append(output_value)
-            except:
-                continue
-        
-        if len(mc_outputs) == 0:
-            return {'mean': 0.0, 'std': 0.0, 'valid_samples': 0}
-        
-        mc_outputs = np.array(mc_outputs)
+        indices = [
+            idx for idx in iterproduct(range(order + 1), repeat=n_params)
+            if sum(idx) <= order
+        ]
+        return np.array(indices, dtype=int)
+
+    def _design_matrix(self, xi: np.ndarray, multi_indices: np.ndarray) -> np.ndarray:
+        """Evaluate multivariate Hermite basis at sample points."""
+        n_samples = xi.shape[0]
+        n_terms = multi_indices.shape[0]
+        Phi = np.ones((n_samples, n_terms))
+        for j in range(n_terms):
+            for d in range(xi.shape[1]):
+                if multi_indices[j, d] > 0:
+                    Phi[:, j] *= eval_hermitenorm(multi_indices[j, d], xi[:, d])
+        return Phi
+
+    def _xi_to_physical(self, xi: np.ndarray) -> Dict[str, float]:
+        phys = {}
+        for i, (name, info) in enumerate(self.uncertain_parameters.items()):
+            phys[name] = info['mean'] + xi[i] * info['std']
+        return phys
+
+    def _empty_pce_result(self) -> Dict:
         return {
-            'mean': np.mean(mc_outputs),
-            'std': np.std(mc_outputs),
-            'valid_samples': len(mc_outputs),
-            'confidence_interval_95': (np.percentile(mc_outputs, 2.5),
-                                     np.percentile(mc_outputs, 97.5))
+            'pce_coefficients': np.array([0.0]),
+            'mean': 0.0,
+            'variance': 0.0,
+            'standard_deviation': 0.0,
+            'confidence_interval_95': (0.0, 0.0),
         }
-    
+
+    # ── Monte Carlo ──────────────────────────────────────────────────────
+
+    def monte_carlo_validation(
+        self,
+        cascade_model_fn: Callable,
+        output_fn: Callable,
+        num_mc_samples: int = 10000,
+    ) -> Dict:
+        mc_outputs = []
+        for _ in range(num_mc_samples):
+            sampled = {}
+            for name, info in self.uncertain_parameters.items():
+                sampled[name] = np.random.normal(info['mean'], info['std'])
+            try:
+                perf = cascade_model_fn(sampled)
+                val = output_fn(perf)
+                if np.isfinite(val):
+                    mc_outputs.append(val)
+            except Exception:
+                continue
+
+        if len(mc_outputs) == 0:
+            return {'mean': 0.0, 'std': 0.0, 'valid_samples': 0,
+                    'confidence_interval_95': (0.0, 0.0)}
+
+        arr = np.array(mc_outputs)
+        return {
+            'mean': float(np.mean(arr)),
+            'std': float(np.std(arr)),
+            'valid_samples': len(arr),
+            'confidence_interval_95': (float(np.percentile(arr, 2.5)),
+                                       float(np.percentile(arr, 97.5))),
+        }
+
+    # ── Sensitivity ──────────────────────────────────────────────────────
+
     def sensitivity_analysis(self) -> Dict[str, float]:
-        """
-        Perform sensitivity analysis using Sobol indices approximation.
-        
-        Returns:
-            Dictionary with first-order sensitivity indices
-        """
-        if len(self.pce_coefficients) == 0:
-            raise ValueError("PCE coefficients not computed. Run build_polynomial_chaos_expansion first.")
-        
-        # Approximate Sobol indices from PCE coefficients
-        total_variance = np.sum(self.pce_coefficients[1:]**2)
-        sensitivity_indices = {}
-        
-        # This is a simplified approximation - full implementation would require
-        # more sophisticated index calculation based on polynomial basis structure
-        num_params = len(self.uncertain_parameters)
-        for i, param_name in enumerate(self.uncertain_parameters.keys()):
-            # Allocate variance contribution roughly equally among parameters
-            # In practice, this would depend on the specific polynomial terms
-            sensitivity_indices[param_name] = 1.0 / num_params
-        
-        return sensitivity_indices
+        """First-order Sobol indices from PCE coefficients."""
+        if len(self.pce_coefficients) < 2:
+            return {name: 1.0 / len(self.uncertain_parameters)
+                    for name in self.uncertain_parameters}
+
+        total_var = float(np.sum(self.pce_coefficients[1:] ** 2))
+        if total_var < 1e-30:
+            return {name: 1.0 / len(self.uncertain_parameters)
+                    for name in self.uncertain_parameters}
+
+        n_params = len(self.uncertain_parameters)
+        mi = self._multi_indices_cache
+        param_names = list(self.uncertain_parameters.keys())
+        sobol = {name: 0.0 for name in param_names}
+
+        for j in range(1, len(self.pce_coefficients)):
+            # First-order term for dimension d: multi-index has
+            # only one nonzero entry at position d
+            nonzero = np.nonzero(mi[j])[0]
+            if len(nonzero) == 1:
+                d = nonzero[0]
+                sobol[param_names[d]] += self.pce_coefficients[j] ** 2
+
+        for name in sobol:
+            sobol[name] /= total_var
+
+        return sobol
 
 
-# Wrapper function for cascade simulation with uncertain parameters
-def create_uncertain_cascade_simulation(stages: int = 10, 
-                                     time_step: float = 1.0,
-                                     simulation_time: float = 24.0):
-    """
-    Create a cascade simulation function that accepts uncertain parameters.
-    
-    This function serves as the nominal_cascade_model for uncertainty quantification.
-    """
+# ── Helper for simulation.py ────────────────────────────────────────────
+
+def create_uncertain_cascade_simulation(
+    stages: int = 10,
+    time_step: float = 0.1,
+    simulation_time: float = 24.0,
+):
+    """Return a callable that runs a cascade with uncertain parameters."""
+
     def uncertain_cascade_model(params: Dict[str, float]) -> Dict[str, float]:
-        """Run cascade simulation with given uncertain parameters."""
         from .cascade_model import CascadeParameters, CentrifugeCascadeModel
-        
-        # Extract parameters with defaults
+
         feed_assay = params.get('feed_assay', 0.00711)
         separation_factor = params.get('separation_factor', 1.2)
         machine_loss = params.get('machine_loss', 0.01)
-        
-        # Adjust feed flow rate for machine losses
-        base_feed_flow = 100.0
-        effective_feed_flow = base_feed_flow * (1.0 - machine_loss)
-        
-        # Create cascade parameters
+
+        # Ensure physical validity
+        feed_assay = np.clip(feed_assay, 0.001, 0.05)
+        separation_factor = max(separation_factor, 1.01)
+        machine_loss = np.clip(machine_loss, 0.0, 0.5)
+
+        effective_feed = 100.0 * (1.0 - machine_loss)
+
         cascade_params = CascadeParameters(
             feed_assay=feed_assay,
-            feed_flow_rate=effective_feed_flow,
+            feed_flow_rate=effective_feed,
             product_assay=0.035,
             tails_assay=0.0025,
             separation_factor=separation_factor,
             machine_count=1000,
             stages=stages,
             time_step=time_step,
-            simulation_time=simulation_time
+            simulation_time=simulation_time,
         )
-        
-        # Run simulation
+
         model = CentrifugeCascadeModel(cascade_params)
-        results = model.simulate_dynamic()
-        performance = model.get_cascade_performance()
-        
-        return performance
-    
+        model.simulate_dynamic()
+        return model.get_cascade_performance()
+
     return uncertain_cascade_model
 
 
-# Example usage
-def example_uncertainty_quantification():
-    """Example usage of uncertainty quantification model."""
-    # Initialize uncertainty model
-    uq_model = UncertaintyQuantificationModel(polynomial_order=3, num_samples=1000)
-    
-    # Define uncertain parameters
-    uq_model.define_uncertain_parameters(
-        feed_assay_mean=0.00711,
-        feed_assay_std=0.0001,
-        separation_factor_mean=1.2,
-        separation_factor_std=0.05,
-        machine_loss_mean=0.01,
-        machine_loss_std=0.005
-    )
-    
-    # Create cascade simulation function
-    cascade_sim = create_uncertain_cascade_simulation(stages=10)
-    
-    # Define output function (extract product assay)
-    def extract_product_assay(performance_dict: Dict[str, float]) -> float:
-        return performance_dict.get('product_assay_actual', 0.0)
-    
-    # Build PCE
-    pce_results = uq_model.build_polynomial_chaos_expansion(
-        cascade_sim, extract_product_assay
-    )
-    
-    # Monte Carlo validation
-    mc_results = uq_model.monte_carlo_validation(
-        cascade_sim, extract_product_assay, num_mc_samples=1000
-    )
-    
-    # Sensitivity analysis
-    sensitivity_results = uq_model.sensitivity_analysis()
-    
-    print("Uncertainty Quantification Results:")
-    print(f"PCE Mean Product Assay: {pce_results['mean']:.4f}")
-    print(f"PCE Std Dev: {pce_results['standard_deviation']:.4f}")
-    print(f"PCE 95% CI: [{pce_results['confidence_interval_95'][0]:.4f}, {pce_results['confidence_interval_95'][1]:.4f}]")
-    print()
-    print(f"MC Mean Product Assay: {mc_results['mean']:.4f}")
-    print(f"MC Std Dev: {mc_results['std']:.4f}")
-    print(f"Valid MC samples: {mc_results['valid_samples']}")
-    print()
-    print("Sensitivity Indices:")
-    for param, index in sensitivity_results.items():
-        print(f"  {param}: {index:.3f}")
-
-
 if __name__ == "__main__":
-    example_uncertainty_quantification()
+    uq = UncertaintyQuantificationModel(polynomial_order=3, num_samples=200)
+    uq.define_uncertain_parameters()
+    sim = create_uncertain_cascade_simulation(stages=10)
+
+    pce = uq.build_polynomial_chaos_expansion(
+        sim, lambda p: p['product_assay_actual']
+    )
+    mc = uq.monte_carlo_validation(
+        sim, lambda p: p['product_assay_actual'], num_mc_samples=500
+    )
+    sobol = uq.sensitivity_analysis()
+
+    print("PCE Results:")
+    print(f"  Mean product assay:  {pce['mean']:.6f}")
+    print(f"  Std deviation:       {pce['standard_deviation']:.6f}")
+    ci = pce['confidence_interval_95']
+    print(f"  95% CI:              [{ci[0]:.6f}, {ci[1]:.6f}]")
+    print(f"\nMC Validation ({mc['valid_samples']} samples):")
+    print(f"  Mean product assay:  {mc['mean']:.6f}")
+    print(f"  Std deviation:       {mc['std']:.6f}")
+    print(f"\nSobol Indices:")
+    for k, v in sobol.items():
+        print(f"  {k}: {v:.4f}")

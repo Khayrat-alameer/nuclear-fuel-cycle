@@ -225,7 +225,10 @@ class ExtractionEfficiencyModel:
         extraction_efficiency = final_recovery / initial_uranium if initial_uranium > 0 else 0.0
         
         # Calculate recovery rate over time
-        recovery_rates = np.diff(self.results['uranium_recovery']) / np.diff(self.results['time'])
+        dt = np.diff(self.results['time'])
+        dr = np.diff(self.results['uranium_recovery'])
+        min_len = min(len(dt), len(dr))
+        recovery_rates = dr[:min_len] / dt[:min_len]
         average_recovery_rate = np.mean(recovery_rates) if len(recovery_rates) > 0 else 0.0
         
         return {

@@ -510,6 +510,8 @@ class IntegratedMiningSimulation:
                 return int(obj)
             elif isinstance(obj, np.floating):
                 return float(obj)
+            elif isinstance(obj, np.bool_):
+                return bool(obj)
             elif isinstance(obj, dict):
                 return {key: convert_numpy(value) for key, value in obj.items()}
             elif isinstance(obj, list):
@@ -624,10 +626,15 @@ def run_example_mining_simulation():
     # Generate and print summary report
     report = sim.generate_summary_report()
     print(report)
-    
+
     # Export results
     export_file = sim.export_results()
-    
+
+    # Generate publication-quality figures
+    from .visualization import MiningVisualization
+    viz = MiningVisualization(results, output_dir="figures/mining")
+    pdf_path = viz.generate_all()
+
     return results, export_file
 
 
